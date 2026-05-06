@@ -272,6 +272,7 @@
     </div>
   </div>
   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <span id="fonteBadge"></span>
     <span class="pill" id="totalPill">0 pedidos</span>
     <span class="pill" style="background:rgba(34,211,238,.18);border-color:rgba(34,211,238,.35);color:#A5F3FC;" id="datePill"></span>
     <div class="user-chip" id="userChip" style="display:none;">
@@ -500,6 +501,10 @@
   <div class="tab-content hidden" id="tab-importar">
     <div class="panel">
       <h2>Importar Planilha (Intelipost ou Excel/CSV)</h2>
+      <div style="background:linear-gradient(135deg,#ECFDF5,#D1FAE5);border:1px solid #A7F3D0;border-radius:14px;padding:14px 18px;margin-bottom:14px;">
+        <strong style="color:#065F46;">🟢 Carregamento automático ativo.</strong>
+        <span style="color:#475569;font-size:13.5px;"> Para atualizar os dados de todos: substitua o arquivo <code style="background:rgba(0,0,0,.06);padding:2px 6px;border-radius:4px;font-family:'Menlo',monospace;font-size:12px;">pedidos.xlsx</code> diretamente no repositório GitHub. Em ~1 minuto, todos verão os dados atualizados ao abrir o site. O upload manual abaixo serve apenas para <strong>testes</strong> — ele não afeta o que outras pessoas veem.</span>
+      </div>
       <div style="background:linear-gradient(135deg,#EFF6FF,#DBEAFE);border:1px solid #BFDBFE;border-radius:14px;padding:14px 18px;margin-bottom:16px;">
         <strong style="color:#1E3A8A;">📌 Uma única importação alimenta TODAS as abas.</strong>
         <span style="color:#475569;font-size:13.5px;"> Após processar, o sistema separa automaticamente: pedidos <strong>Shopee</strong> vão para a aba 🛒 Shopee; pedidos com status <strong>Despachado há &gt; 2 dias</strong> vão para 🚛 Despachados Parados; <strong>demais marketplaces ativos</strong> aparecem na Lista de Pedidos; o Dashboard e o Relatório Semanal recalculam sozinhos.</span>
@@ -1367,15 +1372,25 @@ function formatCellForField(v,k){if(k==='dataEmissao'||k==='dataPrevista'||k==='
 
 function runImport(){
   const m=importState.mapping;
+  const isAuto = !!importState._auto;
   const miss=SYS_FIELDS.filter(f=>f.required&&(m[f.key]==null||m[f.key]===''));
-  if(miss.length){alert('Faltam campos obrigatórios: '+miss.map(f=>f.label).join(', '));return;}
+  if(miss.length){
+    if (!isAuto) alert('Faltam campos obrigatórios: '+miss.map(f=>f.label).join(', '));
+    else console.warn('Auto-load: campos obrigatórios faltando:', miss.map(f=>f.label).join(', '));
+    return;
+  }
   // VALIDAÇÃO RIGOROSA: a coluna mapeada como NF tem valores que parecem série?
   if (m.nf != null){
     const nfSample = importState.sheetData.slice(0,30).map(r => String(r[m.nf]||'').trim()).filter(v => v);
     const curtos = nfSample.filter(v => /^\d{1,3}$/.test(v)).length;
     if (nfSample.length > 0 && curtos > nfSample.length * 0.7){
-      const proceed = confirm('⚠ ATENÇÃO: a coluna selecionada para NOTA FISCAL parece conter SÉRIE (valores curtos como '+nfSample.slice(0,3).join(', ')+').\n\nO número da NF normalmente tem 4+ dígitos.\n\nClique OK para continuar mesmo assim, ou Cancelar para voltar e escolher outra coluna.\n\nDica: clique em "Detectar coluna correta" no campo Nota Fiscal.');
-      if (!proceed) return;
+      if (isAuto){
+        // Em modo auto, apenas avisa no console e prossegue
+        console.warn('Auto-load: coluna NF parece série, prosseguindo mesmo assim.');
+      } else {
+        const proceed = confirm('⚠ ATENÇÃO: a coluna selecionada para NOTA FISCAL parece conter SÉRIE (valores curtos como '+nfSample.slice(0,3).join(', ')+').\n\nO número da NF normalmente tem 4+ dígitos.\n\nClique OK para continuar mesmo assim, ou Cancelar para voltar e escolher outra coluna.\n\nDica: clique em "Detectar coluna correta" no campo Nota Fiscal.');
+        if (!proceed) return;
+      }
     }
   }
   const mode=document.querySelector('input[name="importMode"]:checked').value;
@@ -3881,6 +3896,73 @@ function preencherDataDespachoFaltante(){
   return preenchidos;
 }
 
+// =============================================================
+// CARREGAMENTO AUTOMÁTICO DA PLANILHA EMBUTIDA NO GITHUB
+// =============================================================
+// Tenta baixar pedidos.xlsx do mesmo diretório do site (publicado no GitHub).
+// Se encontrar, executa o pipeline completo de importação automaticamente,
+// substituindo todos os dados existentes (modo replace).
+async function carregarPlanilhaPadrao(){
+  // Adiciona timestamp na URL para forçar bypass do cache do navegador
+  const url = './pedidos.xlsx?t=' + Date.now();
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok){
+      // Sem planilha embutida — modo só upload manual (silencioso)
+      atualizarBadgeFonte(null, null);
+      return;
+    }
+    // Captura a data de última modificação do arquivo no servidor
+    const lastMod = resp.headers.get('Last-Modified');
+    const dataAtualizacao = lastMod ? new Date(lastMod) : null;
+
+    const buffer = await resp.arrayBuffer();
+    const data = new Uint8Array(buffer);
+
+    if (typeof XLSX === 'undefined'){
+      console.warn('XLSX não carregou; auto-load adiado.');
+      return;
+    }
+
+    const wb = XLSX.read(data, { type:'array', cellDates:true });
+    importState.workbook = wb;
+    const sh = wb.SheetNames;
+    if (!sh.length) throw new Error('Planilha sem abas.');
+
+    // Carrega a primeira aba e prepara cabeçalhos/dados
+    loadSheet(sh[0]);
+
+    // Força modo "replace" antes de executar o import
+    const replaceRadio = document.querySelector('input[name="importMode"][value="replace"]');
+    if (replaceRadio) replaceRadio.checked = true;
+
+    // Marca uma flag para suprimir alertas/redirecionamentos do runImport
+    importState._auto = true;
+
+    // Executa a importação como se o usuário tivesse clicado no botão
+    runImport();
+
+    // Marca o badge como "atualizado em ..."
+    atualizarBadgeFonte('auto', dataAtualizacao);
+  } catch(err){
+    console.error('Erro ao carregar planilha do GitHub:', err.message);
+    atualizarBadgeFonte(null, null);
+  } finally {
+    if (importState) importState._auto = false;
+  }
+}
+
+function atualizarBadgeFonte(fonte, dataAtualizacao){
+  const badge = document.getElementById('fonteBadge');
+  if (!badge) return;
+  if (fonte === 'auto' && dataAtualizacao){
+    const dataStr = dataAtualizacao.toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+    badge.innerHTML = `<span class="pill" style="background:rgba(16,185,129,.18);border-color:rgba(16,185,129,.35);color:#A7F3D0;">🟢 Atualizado em ${dataStr}</span>`;
+  } else {
+    badge.innerHTML = '';
+  }
+}
+
 // === INICIALIZAÇÃO ===
 applyAuth();
 load();
@@ -3891,6 +3973,8 @@ refreshDashboard();
 if (typeof setLast7 === 'function') setLast7();
 if (typeof updateHeaderDate === 'function') updateHeaderDate();
 setInterval(() => { if (typeof updateHeaderDate === 'function') updateHeaderDate(); }, 60000);
+// Auto-load da planilha publicada no GitHub (após inicialização básica)
+carregarPlanilhaPadrao();
 </script>
 
 <footer style="background:linear-gradient(180deg,transparent,rgba(15,23,42,.04));padding:30px 32px 24px;margin-top:30px;border-top:1px solid var(--border)">
