@@ -493,7 +493,6 @@
       <div class="chart-wrap"><h3>Transportadoras</h3><canvas id="chartTransp"></canvas></div>
       <div class="chart-wrap"><h3>UFs</h3><canvas id="chartUF"></canvas></div>
       <div class="chart-wrap"><h3>Distribuição por Status</h3><canvas id="chartStatus"></canvas></div>
-      <div class="chart-wrap"><h3>Evolução · 7 dias</h3><canvas id="chartEvolucao"></canvas></div>
     </div>
   </div>
 
@@ -2175,7 +2174,6 @@ function drawCharts(ativos){
   if(sts.length){
     barH('chartStatus', sts, '#1E3A8A');
   }
-  drawEvolucaoChart();
 }
 
 function drawEvolucaoChart(){
