@@ -1269,6 +1269,15 @@ function buildMapping(){
     if (importState.mapping.pedido != null){ used.delete('pedido'); usedColumns.delete(importState.mapping.pedido); }
     importState.mapping.pedido = bestPed; used.add('pedido'); usedColumns.add(bestPed);
   }
+  // SOBRESCREVE auto-match do MARKETPLACE — prefere coluna "Canal de Vendas" / "Canal de Venda"
+  // (se houver coluna chamada apenas "marketplace" pode estar com valor genérico tipo "Sysemp")
+  let mktByName = headersNorm.findIndex(x => x === 'canal de vendas');
+  if (mktByName < 0) mktByName = headersNorm.findIndex(x => x === 'canal de venda');
+  if (mktByName < 0) mktByName = headersNorm.findIndex(x => x === 'canal');
+  if (mktByName >= 0 && importState.mapping.marketplace !== mktByName){
+    if (importState.mapping.marketplace != null){ usedColumns.delete(importState.mapping.marketplace); }
+    importState.mapping.marketplace = mktByName; used.add('marketplace'); usedColumns.add(mktByName);
+  }
   // Coleta amostras (3 primeiros valores únicos) de cada coluna
   const samples = importState.headers.map((_, idx) => {
     const vals = [];
